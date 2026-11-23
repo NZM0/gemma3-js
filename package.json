@@ -1,0 +1,16 @@
+{
+    "name": "gemma3-js",
+    "version": "0.1.0-rc.2",
+    "private": true,
+    "type": "module",
+    "description": "Gemma 3 1B browser inference: native WebGPU/WGSL and independent TensorFlow.js/WebGL",
+    "exports": {
+        "./engine": "./src/index.js"
+    },
+    "scripts": {
+        "test": "node --test tests/*.test.mjs",
+        "test:official": "node --test tests/official/*.test.mjs",
+        "serve": "python3 -m http.server 8000",
+        "test:unit": "npm test"
+    }
+}

@@ -1,0 +1,5 @@
+body { font: 16px system-ui, sans-serif; margin: 0; background: #101723; color: #edf2f7; }
+main { max-width: 650px; margin: 10vh auto; padding: 2rem; }
+nav { display: flex; flex-wrap: wrap; gap: 1rem; margin: 2rem 0; }
+a { padding: 1rem; background: #26394f; color: white; border-radius: .5rem; text-decoration: none; }
+a:hover { background: #355778; }

@@ -1,0 +1,23 @@
+:root { font-family: system-ui, -apple-system, sans-serif; color: #e9edf7; background: #101522; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 900px; margin: 0 auto; padding: 24px; }
+header { margin-bottom: 24px; }
+h1 { margin: 0; font-size: 2rem; }
+header p, .note { color: #9caac2; }
+.setup, .messages, form, details { background: #1b2435; border: 1px solid #334058; border-radius: 14px; padding: 18px; margin: 14px 0; }
+label { display: block; margin: 8px 0; }
+input[type="file"] { display: block; margin: 10px 0; max-width: 100%; }
+input[type="number"] { width: 72px; padding: 8px; }
+.controls { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
+button { border: 0; border-radius: 9px; padding: 11px 18px; color: white; background: #4366d9; cursor: pointer; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+.messages { min-height: 180px; max-height: 420px; overflow-y: auto; }
+.message { margin: 12px 0; padding: 12px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message.user { background: #30405c; margin-left: 15%; }
+.message.assistant { background: #243c37; margin-right: 15%; }
+.message small { display: block; color: #acbbd1; margin-bottom: 6px; }
+textarea { display: block; width: 100%; resize: vertical; min-height: 75px; background: #101522; color: white; border: 1px solid #52617b; border-radius: 9px; padding: 12px; font: inherit; }
+form button { margin-top: 12px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; }
+.note { font-size: .85rem; line-height: 1.6; }
