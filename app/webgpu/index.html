@@ -10,6 +10,7 @@
 <main>
     <header><h1>Gemma 3 JS</h1><p>Native WebGPU inference · local browser chat</p></header>
     <section class="setup">
+        <label>Model source <select id="model-source"><option value="local">Local folder (Reference FP32)</option><option value="hf">Hugging Face (Reference FP32)</option></select></label>
         <label>Model data (full-vocabulary official-model folder)<input id="folder" type="file" webkitdirectory directory multiple></label>
         <div class="controls"><label>Max new tokens <input id="count" type="number" min="1" max="64" value="24"></label><label><input id="use-cache" type="checkbox" checked> Reuse KV cache</label><button id="load" disabled>Load model</button><button id="unload" disabled>Unload</button></div>
         <p id="status">Select a model folder.</p>
@@ -17,7 +18,7 @@
     </section>
     <button id="new-chat" type="button">New chat</button> <button id="export-parity" type="button">Export parity trace JSON</button> <button id="validate-combined" type="button" disabled>Run combined validation</button> <button id="validate-final" type="button" disabled>Final audit (unloads model)</button>
     <section id="messages" class="messages" aria-live="polite"></section>
-    <form id="chat"><textarea id="prompt" rows="3" placeholder="Ask a question..." disabled>日本の首都はどこですか？</textarea><button id="send" disabled>Generate</button></form>
+    <form id="chat"><textarea id="prompt" rows="3" placeholder="Ask a question..." disabled>Where is the capital of Japan?</textarea><button id="send" disabled>Generate</button></form>
     <details><summary>Execution log</summary><pre id="log"></pre></details>
     <p class="note">Model weights are not bundled. KV cache is reused across turns only when the next tokenized prompt has the identical cached prefix; otherwise the full prompt is recomputed. Arbitrary prompts require tokenizer reference checks to pass.</p>
 </main>

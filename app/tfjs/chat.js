@@ -1,3 +1,4 @@
+import { createLocalModelSource, createRemoteModelSource } from '../../src/model-source.js';
 import { runFinalAudit, downloadFinalAudit } from '../final-audit.js';
 import { runCombinedValidation, downloadValidationReport } from '../validation.js';
 import { GEMMA3_1B } from '../../src/gemma3-core.js';
@@ -21,7 +22,16 @@ let activeTurn = null;
 let auditBeforeLoad = null;
 let gpuBufferAudit = null;
 
-folder.addEventListener('change', () => { loadButton.disabled = folder.files.length === 0; });
+const source = el('model-source');
+const canLoad = () => source.value === 'hf' || folder.files.length > 0;
+function updateSource() {
+    folder.disabled = busy || source.value === 'hf';
+    source.disabled = busy;
+    loadButton.disabled = busy || !canLoad();
+}
+folder.addEventListener('change', updateSource);
+source.addEventListener('change', updateSource);
+updateSource();
 
 function message(role, content = '') {
     const node = document.createElement('div');
@@ -55,23 +65,14 @@ unloadButton.addEventListener('click', () => { if (!busy) { dispose(); status('M
 loadButton.addEventListener('click', async () => {
     if (busy) { return; }
     busy = true;
-    loadButton.disabled = true;
+    updateSource();
     dispose();
     auditBeforeLoad = window.tf?.memory() ? { numTensors: window.tf.memory().numTensors, numBytes: window.tf.memory().numBytes, numDataBuffers: window.tf.memory().numDataBuffers } : null;
     const layers = [];
     let session = null;
     let head = null;
     try {
-        const files = new Map();
-        for (const file of folder.files) {
-            const parts = (file.webkitRelativePath || file.name).split('/');
-            files.set(parts.slice(1).join('/'), file);
-        }
-        const get = name => {
-            const file = files.get(name);
-            if (!file) { throw new Error(`Missing file: ${name}`); }
-            return file;
-        };
+        const get = source.value === 'hf' ? createRemoteModelSource() : createLocalModelSource(folder.files);
         const read = async name => new Float32Array(await get(name).arrayBuffer());
         const manifest = JSON.parse(await get('manifest.json').text());
         if (manifest.head.mode !== 'full') { throw new Error('A full-vocabulary model export is required'); }
@@ -134,7 +135,7 @@ loadButton.addEventListener('click', async () => {
         
     } finally {
         busy = false;
-        loadButton.disabled = folder.files.length === 0;
+        updateSource();
     }
 });
 

@@ -115,12 +115,11 @@ def main():
         "hiddenSize": 1152,
         "numLayers": 26,
         "layers": [],
-        "tokenEmbedding": "token-embeddings.f32",
+        "tokenEmbedding": "lm-head.f32",
         "finalNorm": "final-norm.f32",
         "head": {"mode": "full", "file": "lm-head.f32", "shape": [262144, 1152]},
     }
-    write_tensor(embedding, output / "token-embeddings.f32")
-    # Tied weights: duplicate for compatibility with existing LM head filename.
+    # Tied weights: one physical file serves both embedding and LM head.
     write_tensor(embedding, output / "lm-head.f32")
     del embedding
     write_tensor(get("model.norm.weight"), output / "final-norm.f32")

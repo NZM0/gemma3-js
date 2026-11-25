@@ -1,3 +1,4 @@
+import { createLocalModelSource, createRemoteModelSource } from '../../src/model-source.js';
 import { runFinalAudit, downloadFinalAudit, createGpuBufferAudit } from '../final-audit.js';
 import { runCombinedValidation, downloadValidationReport } from '../validation.js';
 import { GEMMA3_1B } from '../../src/gemma3-core.js';
@@ -22,7 +23,16 @@ let activeTurn = null;
 let auditBeforeLoad = null;
 let gpuBufferAudit = null;
 
-folder.addEventListener('change', () => { loadButton.disabled = folder.files.length === 0; });
+const source = el('model-source');
+const canLoad = () => source.value === 'hf' || folder.files.length > 0;
+function updateSource() {
+    folder.disabled = busy || source.value === 'hf';
+    source.disabled = busy;
+    loadButton.disabled = busy || !canLoad();
+}
+folder.addEventListener('change', updateSource);
+source.addEventListener('change', updateSource);
+updateSource();
 
 function message(role, content = '') {
     const node = document.createElement('div');
@@ -56,23 +66,15 @@ unloadButton.addEventListener('click', () => { if (!busy) { dispose(); status('M
 loadButton.addEventListener('click', async () => {
     if (busy) { return; }
     busy = true;
-    loadButton.disabled = true;
+    updateSource();
     dispose();
     auditBeforeLoad = null;
     const layers = [];
     let session = null;
     let head = null;
     try {
-        const files = new Map();
-        for (const file of folder.files) {
-            const parts = (file.webkitRelativePath || file.name).split('/');
-            files.set(parts.slice(1).join('/'), file);
-        }
-        const get = name => {
-            const file = files.get(name);
-            if (!file) { throw new Error(`Missing file: ${name}`); }
-            return file;
-        };
+        const sourceMode = source.value;
+        const get = sourceMode === 'hf' ? createRemoteModelSource() : createLocalModelSource(folder.files);
         const read = async name => new Float32Array(await get(name).arrayBuffer());
         const manifest = JSON.parse(await get('manifest.json').text());
         if (manifest.head.mode !== 'full') { throw new Error('A full-vocabulary model export is required'); }
@@ -92,7 +94,12 @@ loadButton.addEventListener('click', async () => {
         }
         const adapter = await navigator.gpu?.requestAdapter();
         if (!adapter) { throw new Error('WebGPU unavailable'); }
+        status(`WebGPU shader-f16: ${adapter.features.has('shader-f16')}`);
+        for (const name of ['maxBufferSize', 'maxStorageBufferBindingSize', 'maxComputeWorkgroupsPerDimension', 'maxStorageBuffersPerShaderStage']) {
+            status(`Adapter ${name}: ${adapter.limits[name]}`);
+        }
         const device = await adapter.requestDevice();
+        status(`Device maxBufferSize: ${device.limits.maxBufferSize}; maxStorageBufferBindingSize: ${device.limits.maxStorageBufferBindingSize}`);
         gpuBufferAudit?.stop();
         gpuBufferAudit = null;
         try {
@@ -110,6 +117,7 @@ loadButton.addEventListener('click', async () => {
                 tensors[name] = await read(`${spec.directory}/${entry.file}`);
             }
             layers.push(new WebGpuFullLayerSession(device, tensors, GEMMA3_1B, i));
+            await device.queue.onSubmittedWorkDone();
             status(`GPU layers ${i + 1}/${manifest.layers.length}`);
         }
         session = new WebGpuFullModelSession(device, layers, norm);
@@ -130,7 +138,7 @@ loadButton.addEventListener('click', async () => {
         engine = new Gemma3ConversationEngine({
             session,
             tokenizer,
-            embed: id => embedding(id, runtime.headFile),
+            embed: id => embedding(id, runtime.headFile, sourceMode === 'hf' ? head : null),
             predict: hidden => predict(hidden, runtime),
             eosTokenIds: GEMMA3_1B.eosTokenIds,
             useCache: el('use-cache').checked
@@ -144,7 +152,7 @@ loadButton.addEventListener('click', async () => {
         else { for (const layer of layers) { layer.dispose(); } }
     } finally {
         busy = false;
-        loadButton.disabled = folder.files.length === 0;
+        updateSource();
     }
 });
 
@@ -154,9 +162,9 @@ async function predict(hidden, state) {
         : state.head.predictResidentBuffer(hidden);
 }
 
-async function embedding(tokenId, headFile) {
+async function embedding(tokenId, headFile, residentHead = null) {
     const rowBytes = GEMMA3_1B.hiddenSize * 4;
-    const vector = new Float32Array(await headFile.slice(tokenId * rowBytes, (tokenId + 1) * rowBytes).arrayBuffer());
+    const vector = residentHead ? await residentHead.readEmbedding(tokenId) : new Float32Array(await headFile.slice(tokenId * rowBytes, (tokenId + 1) * rowBytes).arrayBuffer());
     const scale = Math.sqrt(GEMMA3_1B.hiddenSize);
     for (let i = 0; i < vector.length; i += 1) { vector[i] *= scale; }
     return vector;

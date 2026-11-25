@@ -138,14 +138,32 @@ export class WebGpuLmHead {
                 if (rows.length !== (end - start) * this.hiddenSize) {
                     throw new Error(`LM-head file truncated at row ${start}`);
                 }
-                const weight = this.upload(rows);
+                const weight = this.make(rows.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+                this.device.queue.writeBuffer(weight, 0, rows);
                 this.residentChunks.push({ start, end, weight });
+                await this.device.queue.onSubmittedWorkDone();
                 onProgress(end, vocab);
             }
             this.residentVocab = vocab;
         } catch (error) {
             this.clearResidentWeights();
             throw error;
+        }
+    }
+
+    async readEmbedding(tokenId) {
+        const chunk = this.residentChunks.find(entry => tokenId >= entry.start && tokenId < entry.end);
+        if (!chunk) { throw new Error(`Invalid embedding token: ${tokenId}`); }
+        const bytes = this.hiddenSize * 4;
+        const buffer = this.make(bytes, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+        try {
+            const encoder = this.device.createCommandEncoder();
+            encoder.copyBufferToBuffer(chunk.weight, (tokenId - chunk.start) * bytes, buffer, 0, bytes);
+            this.device.queue.submit([encoder.finish()]);
+            await buffer.mapAsync(GPUMapMode.READ);
+            return new Float32Array(buffer.getMappedRange().slice(0));
+        } finally {
+            buffer.destroy();
         }
     }
 

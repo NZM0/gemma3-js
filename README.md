@@ -9,12 +9,12 @@ The backends share model format, tokenizer and conversation management. The appl
 
 ## Run locally
 
-1. Obtain the converted Gemma 3 1B IT model directory (or export one as described below). It must contain `manifest.json`, `chat-tokenizer.json`, `token-embeddings.f32`, `lm-head.f32`, `final-norm.f32`, and the `layer-00` through `layer-25` directories.
+1. Obtain the converted Gemma 3 1B IT model directory (or export one as described below). It must contain `manifest.json`, `chat-tokenizer.json`, `lm-head.f32`, `final-norm.f32`, and the `layer-00` through `layer-25` directories.
 2. In this repository, run `npm run serve` (Python 3 required).
 3. Open `http://localhost:8000/app/` and choose **WebGPU** or **TensorFlow.js / WebGL**.
-4. Use the **local folder picker** to select the converted model directory and start chatting.
+4. Select the local folder or Hugging Face model source, then load the model.
 
-Model weights are **not** included in the source repository. The browser reads the model files from the selected local folder; the application does **not** currently implement direct Hugging Face URL loading. The TensorFlow.js demo uses TensorFlow.js 4.22.0 from a CDN, so its initial load requires network access. Browser/GPU support and available memory determine whether inference can run.
+Model weights are **not** included in the source repository. Select Local folder or Hugging Face in either chat demo. The remote source uses the public NZM0/gemma3-js-1b-it repository and requires HTTPS, CORS and exact HTTP 206 byte ranges for sliced reads. WebGPU uploads the head in chunks and reads remote-mode embeddings from resident GPU weights; WebGL still loads the full head and uses remote row reads. New production exports store tied weights once; older exports remain supported. Remote loading and GPU embedding readback require real-browser validation. The TensorFlow.js demo uses TensorFlow.js 4.22.0 from a CDN, so its initial load requires network access. Browser/GPU support and available memory determine whether inference can run.
 
 ## Export model weights
 

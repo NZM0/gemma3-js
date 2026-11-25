@@ -5,3 +5,4 @@ export { WebGpuFullModelSession } from "./backends/webgpu/webgpu-full-model.js";
 export { WebGpuFullLayerSession } from "./backends/webgpu/webgpu-full-layer.js";
 export { WebGpuLmHead } from "./backends/webgpu/webgpu-lm-head.js";
 export { TfjsFullModelSession } from "./backends/tfjs-webgl/tfjs-full-model.js";
+export { DEFAULT_MODEL_URL, createLocalModelSource, createRemoteModelSource } from './model-source.js';
