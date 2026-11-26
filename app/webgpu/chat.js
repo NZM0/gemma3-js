@@ -1,4 +1,4 @@
-import { createLocalModelSource, createRemoteModelSource, createBundledModelSource, createChunkedHeadSource } from '../../src/model-source.js';
+import { MOBILE_MODEL_URL, createLocalModelSource, createRemoteModelSource, createBundledModelSource, createChunkedHeadSource } from '../../src/model-source.js';
 import { runFinalAudit, downloadFinalAudit, createGpuBufferAudit } from '../final-audit.js';
 import { runCombinedValidation, downloadValidationReport } from '../validation.js';
 import { GEMMA3_1B } from '../../src/gemma3-core.js';
@@ -79,11 +79,22 @@ loadButton.addEventListener('click', async () => {
     let head = null;
     try {
         const sourceMode = source.value;
-        const get = sourceMode === 'hf' ? createRemoteModelSource() : ['bundled', 'mobile'].includes(sourceMode) ? createBundledModelSource(new URL(sourceMode === 'mobile' ? '../../model/mobile/' : '../../model/performance/', location.href).href) : createLocalModelSource(folder.files);
+        let get;
+        if (sourceMode === 'hf' || sourceMode === 'hf-mobile') {
+            get = sourceMode === 'hf-mobile' ? createRemoteModelSource(MOBILE_MODEL_URL) : createRemoteModelSource();
+        } else if (sourceMode === 'bundled' || sourceMode === 'mobile') {
+            const path = sourceMode === 'mobile' ? '../../model/mobile/' : '../../model/performance/';
+            get = createBundledModelSource(new URL(path, location.href).href);
+        } else {
+            get = createLocalModelSource(folder.files);
+        }
         const read = async name => new Float32Array(await get(name).arrayBuffer());
         const manifest = JSON.parse(await get('manifest.json').text());
         const half = manifest.precision === 'w16a32';
         const int4 = manifest.precision === 'w4a32';
+        if (sourceMode === 'hf-mobile' && (!int4 || !manifest.head.chunkBytes)) {
+            throw new Error('Expected chunked Mobile W4A32 model');
+        }
         if (manifest.precision && !half && !int4 && manifest.precision !== 'fp32') { throw new Error('Unsupported model precision'); }
         status(`Execution mode: ${int4 ? 'Mobile W4A32' : half ? 'Performance W16A32' : 'Reference FP32'}`);
         if (manifest.head.mode !== 'full') { throw new Error('A full-vocabulary model export is required'); }

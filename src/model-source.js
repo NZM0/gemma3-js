@@ -1,3 +1,5 @@
+export const MOBILE_MODEL_URL = 'https://huggingface.co/NZM0/gemma3-js-1b-it-int4/resolve/main/';
+
 export const DEFAULT_MODEL_URL = 'https://huggingface.co/NZM0/gemma3-js-1b-it/resolve/main/';
 
 export function createLocalModelSource(files) {

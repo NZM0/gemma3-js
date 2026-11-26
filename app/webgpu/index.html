@@ -10,7 +10,7 @@
 <main>
     <header><h1>Gemma 3 JS</h1><p>Native WebGPU inference · local browser chat</p></header>
     <section class="setup">
-        <label>Model source <select id="model-source"><option value="local">Local folder (FP32 / W16A32 / W4A32)</option><option value="hf">Hugging Face (Reference FP32)</option><option value="bundled">Bundled model (Performance)</option><option value="mobile">Bundled model (Mobile INT4)</option></select></label>
+        <label>Model source <select id="model-source"><option value="local">Local folder (FP32 / W16A32 / W4A32)</option><option value="hf">Hugging Face (Reference FP32)</option><option value="hf-mobile">Hugging Face (Mobile INT4)</option><option value="bundled">Bundled model (Performance)</option><option value="mobile">Bundled model (Mobile INT4)</option></select></label>
         <label>Model data (full-vocabulary official-model folder)<input id="folder" type="file" webkitdirectory directory multiple></label>
         <div class="controls"><label>Max new tokens <input id="count" type="number" min="1" max="64" value="24"></label><label><input id="use-cache" type="checkbox" checked> Reuse KV cache</label><button id="load" disabled>Load model</button><button id="unload" disabled>Unload</button></div>
         <p id="status">Select a model folder.</p>

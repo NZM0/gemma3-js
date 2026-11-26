@@ -1,6 +1,6 @@
 # gemma3-js
 
-**v0.2.0 — Mobile INT4 inference on iPhone**
+**v0.2.1 — Hugging Face Mobile INT4 loading**
 
 An independent, browser-based **Gemma 3 1B instruction-tuned text inference** implementation. Two backends are provided:
 
@@ -102,7 +102,7 @@ Convert the original full FP32 export (not the Performance export):
 python3 python/convert_mobile.py --input model/REFERENCE_DIRECTORY --output model/mobile
 ```
 
-Select Bundled model (Mobile INT4) in the WebGPU chat. Each group of 32
+Select Bundled model (Mobile INT4) in the WebGPU chat for a local server, or Hugging Face (Mobile INT4) to fetch the published model from `NZM0/gemma3-js-1b-it-int4`. The latter requires that the model repository has been uploaded and made public. It downloads individual packed tensors and head chunks without HTTP range requests. Remote Mobile loading on iPhone has not yet been verified. Each group of 32
 weights uses a float32 scale and four packed uint32 words, 5 bits per weight
 including scale overhead. The symmetric quantizer uses values -7 through 7,
 encoded with offset 8. Matrix input dimensions must be multiples of 32.

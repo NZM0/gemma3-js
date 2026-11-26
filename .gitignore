@@ -7,3 +7,10 @@ models/
 *.f32
 *.ckpt
 *.safetensors
+*.f16
+*.q4
+.venv/
+.env
+*.pem
+*.key
+fixtures/official-model*/

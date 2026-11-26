@@ -22,3 +22,14 @@ test('remote source rejects ignored ranges rather than buffering full file', asy
     const get = createRemoteModelSource('https://example.com/', async () => new Response('abcd'));
     await assert.rejects(get('a').slice(1, 3).arrayBuffer(), /exact byte ranges/);
 });
+
+test('mobile HF source reads packed head chunks without range requests', async () => {
+    const { MOBILE_MODEL_URL, createChunkedHeadSource } = await import('../src/model-source.js');
+    const get = createRemoteModelSource(MOBILE_MODEL_URL, async (url, options) => {
+        assert.equal(url, MOBILE_MODEL_URL + 'head-part-001.q4');
+        assert.equal(options.headers, undefined);
+        return new Response(new Uint8Array([1, 2, 3, 4]));
+    });
+    const head = createChunkedHeadSource(get, 4, 'q4');
+    assert.deepEqual(new Uint8Array(await head.slice(4, 8).arrayBuffer()), new Uint8Array([1, 2, 3, 4]));
+});
