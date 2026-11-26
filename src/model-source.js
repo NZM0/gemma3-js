@@ -10,9 +10,9 @@ export function createLocalModelSource(files) {
     };
 }
 
-export function createRemoteModelSource(base = DEFAULT_MODEL_URL, fetcher = fetch) {
+export function createRemoteModelSource(base = DEFAULT_MODEL_URL, fetcher = fetch, allowLocal = false) {
     const root = new URL(base.endsWith('/') ? base : `${base}/`);
-    if (root.protocol !== 'https:') { throw new Error('Remote model URL must use HTTPS'); }
+    if (root.protocol !== 'https:' && !(allowLocal && root.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(root.hostname))) { throw new Error('Remote model URL must use HTTPS'); }
     return name => {
         const parts = name.split('/');
         if (parts.some(part => !part || part === '.' || part === '..')) {
@@ -35,7 +35,10 @@ export function createRemoteModelSource(base = DEFAULT_MODEL_URL, fetcher = fetc
         }
         return {
             async text() { return (await request()).text(); },
-            async arrayBuffer() { return (await request()).arrayBuffer(); },
+            async arrayBuffer() {
+                try { return await (await request()).arrayBuffer(); }
+                catch (error) { throw new Error(`${name}: ${error.message}`, { cause: error }); }
+            },
             slice(start, end) {
                 return { async arrayBuffer() {
                     const data = await (await request([start, end])).arrayBuffer();
@@ -44,5 +47,37 @@ export function createRemoteModelSource(base = DEFAULT_MODEL_URL, fetcher = fetc
                 } };
             }
         };
+    };
+}
+
+export function createBundledModelSource(base, fetcher = fetch) {
+    return createRemoteModelSource(base, fetcher, true);
+}
+
+// A logical file backed by small, independently fetchable model resources.
+export function createChunkedHeadSource(get, chunkBytes, extension = 'f16') {
+    return {
+        slice(start, end) {
+            return { async arrayBuffer() {
+                if (start % chunkBytes === 0 && end - start === chunkBytes) {
+                    const name = `head-part-${String(start / chunkBytes).padStart(3, '0')}.${extension}`;
+                    const data = await get(name).arrayBuffer();
+                    if (data.byteLength !== chunkBytes) { throw new Error(`Truncated ${name}`); }
+                    return data;
+                }
+                const result = new Uint8Array(end - start);
+                for (let offset = start; offset < end;) {
+                    const index = Math.floor(offset / chunkBytes);
+                    const within = offset % chunkBytes;
+                    const count = Math.min(end - offset, chunkBytes - within);
+                    const name = `head-part-${String(index).padStart(3, '0')}.${extension}`;
+                    const bytes = new Uint8Array(await get(name).arrayBuffer());
+                    if (within + count > bytes.length) { throw new Error(`Truncated ${name}`); }
+                    result.set(bytes.subarray(within, within + count), offset - start);
+                    offset += count;
+                }
+                return result.buffer;
+            } };
+        }
     };
 }

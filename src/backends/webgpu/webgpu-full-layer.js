@@ -106,11 +106,46 @@ fn attn(@builtin(global_invocation_id) id: vec3<u32>) {
 `;
 
 /** Stage 13: GPU-resident one-token transformer block. No CPU intermediate readbacks. */
+const halfMatrixShader = `enable f16;
+struct Params { n: u32, m: u32, position: u32, cacheLength: u32, theta: f32, scalar: f32, eps: f32, capacity: u32, };
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> halfWeights: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: Params;
+
+@compute @workgroup_size(64)
+fn matvecHalf(@builtin(global_invocation_id) id: vec3<u32>) {
+    let r = id.x;
+    if (r >= p.m) { return; }
+    var acc = 0.0;
+    for (var c = 0u; c < p.n; c = c + 1u) {
+        acc += f32(halfWeights[r * p.n + c]) * x[c];
+    }
+    y[r] = acc;
+}
+`;
+
+// Each 32-weight group occupies five u32 words: f32 scale, four packed words.
+const int4MatrixShader = halfMatrixShader.replace('enable f16;', '')
+    .replace('halfWeights: array<f16>', 'halfWeights: array<u32>')
+    .replace('@compute @workgroup_size(64)', `fn weightAt(i: u32) -> f32 {
+    let base = (i / 32u) * 5u;
+    let lane = i % 32u;
+    let packed = halfWeights[base + 1u + lane / 8u];
+    let q = i32((packed >> ((lane % 8u) * 4u)) & 15u) - 8;
+    return f32(q) * bitcast<f32>(halfWeights[base]);
+}
+@compute @workgroup_size(64)`)
+    .replace(/f32\(halfWeights\[([^\]]+)\]\)/g, 'weightAt($1)');
+
+
 export class WebGpuFullLayerSession {
     constructor(device, layer, config = GEMMA3_1B, layerIndex = 0) {
         this.device = device;
         this.config = config;
         this.layerIndex = layerIndex;
+        this.halfWeights = layer.qProj instanceof Uint16Array;
+        this.int4Weights = layer.qProj instanceof Uint32Array;
         this.position = 0;
         this.disposed = false;
         this.buffers = [];
@@ -128,9 +163,13 @@ export class WebGpuFullLayerSession {
         for (const entry of ["matvec", "norm", "qknormrope", "copyvec", "addnorm", "gelumul", "attn"]) {
             this.pipelines[entry] = device.createComputePipeline({ layout: "auto", compute: { module: this.shader, entryPoint: entry } });
         }
+        if (this.halfWeights || this.int4Weights) {
+            const module = device.createShaderModule({ code: this.int4Weights ? int4MatrixShader : halfMatrixShader });
+            this.pipelines.matvec = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "matvecHalf" } });
+        }
         for (const [name, data] of Object.entries(layer)) {
-            if (!(data instanceof Float32Array)) { continue; }
-            this.weights[name] = this.make(data.length, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+            if (!(data instanceof Float32Array || data instanceof Uint16Array || data instanceof Uint32Array)) { continue; }
+            this.weights[name] = this.make(data.byteLength / 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
             device.queue.writeBuffer(this.weights[name], 0, data);
         }
         this.hidden = this.make(config.hiddenSize, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);

@@ -1,6 +1,6 @@
 {
     "name": "gemma3-js",
-    "version": "0.1.0-rc.2",
+    "version": "0.2.0",
     "private": true,
     "type": "module",
     "description": "Gemma 3 1B browser inference: native WebGPU/WGSL and independent TensorFlow.js/WebGL",

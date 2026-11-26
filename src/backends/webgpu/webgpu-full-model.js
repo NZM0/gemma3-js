@@ -230,7 +230,7 @@ export class WebGpuFullModelSession {
                 throw new Error(`Layer ${layer.layerIndex}: global KV cache capacity exceeded`);
             }
         }
-        this.parallelPrefill ??= new WebGpuParallelPrefill(this.device, this.config);
+        this.parallelPrefill ??= new WebGpuParallelPrefill(this.device, this.config, this.layers[0].halfWeights, this.layers[0].int4Weights);
         let result = null;
         for (let start = 0; start < embeddings.length; start += countLimit) {
             const count = Math.min(countLimit, embeddings.length - start);

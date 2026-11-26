@@ -1,4 +1,4 @@
-import { createLocalModelSource, createRemoteModelSource } from '../../src/model-source.js';
+import { createLocalModelSource, createRemoteModelSource, createBundledModelSource, createChunkedHeadSource } from '../../src/model-source.js';
 import { runFinalAudit, downloadFinalAudit, createGpuBufferAudit } from '../final-audit.js';
 import { runCombinedValidation, downloadValidationReport } from '../validation.js';
 import { GEMMA3_1B } from '../../src/gemma3-core.js';
@@ -13,7 +13,12 @@ const folder = el('folder');
 const loadButton = el('load');
 const unloadButton = el('unload');
 const sendButton = el('send');
-const log = message => { el('log').textContent += `${message}\n`; };
+const log = message => {
+    el('log').textContent += `${message}\n`;
+    console.log(message);
+    try { localStorage.setItem('gemma3-last-log', el('log').textContent.slice(-32000)); } catch {}
+};
+try { el('log').textContent = localStorage.getItem('gemma3-last-log') || ''; } catch {}
 const status = message => { el('status').textContent = message; log(message); };
 let runtime = null;
 let busy = false;
@@ -24,9 +29,9 @@ let auditBeforeLoad = null;
 let gpuBufferAudit = null;
 
 const source = el('model-source');
-const canLoad = () => source.value === 'hf' || folder.files.length > 0;
+const canLoad = () => source.value !== 'local' || folder.files.length > 0;
 function updateSource() {
-    folder.disabled = busy || source.value === 'hf';
+    folder.disabled = busy || source.value !== 'local';
     source.disabled = busy;
     loadButton.disabled = busy || !canLoad();
 }
@@ -74,9 +79,13 @@ loadButton.addEventListener('click', async () => {
     let head = null;
     try {
         const sourceMode = source.value;
-        const get = sourceMode === 'hf' ? createRemoteModelSource() : createLocalModelSource(folder.files);
+        const get = sourceMode === 'hf' ? createRemoteModelSource() : ['bundled', 'mobile'].includes(sourceMode) ? createBundledModelSource(new URL(sourceMode === 'mobile' ? '../../model/mobile/' : '../../model/performance/', location.href).href) : createLocalModelSource(folder.files);
         const read = async name => new Float32Array(await get(name).arrayBuffer());
         const manifest = JSON.parse(await get('manifest.json').text());
+        const half = manifest.precision === 'w16a32';
+        const int4 = manifest.precision === 'w4a32';
+        if (manifest.precision && !half && !int4 && manifest.precision !== 'fp32') { throw new Error('Unsupported model precision'); }
+        status(`Execution mode: ${int4 ? 'Mobile W4A32' : half ? 'Performance W16A32' : 'Reference FP32'}`);
         if (manifest.head.mode !== 'full') { throw new Error('A full-vocabulary model export is required'); }
         const tokenizerData = JSON.parse(await get('chat-tokenizer.json').text());
         const tokenizer = new Gemma3ChatTokenizer(tokenizerData);
@@ -98,7 +107,8 @@ loadButton.addEventListener('click', async () => {
         for (const name of ['maxBufferSize', 'maxStorageBufferBindingSize', 'maxComputeWorkgroupsPerDimension', 'maxStorageBuffersPerShaderStage']) {
             status(`Adapter ${name}: ${adapter.limits[name]}`);
         }
-        const device = await adapter.requestDevice();
+        if (half && !adapter.features.has('shader-f16')) { throw new Error('Performance requires shader-f16'); }
+        const device = await adapter.requestDevice(half ? { requiredFeatures: ['shader-f16'] } : {});
         status(`Device maxBufferSize: ${device.limits.maxBufferSize}; maxStorageBufferBindingSize: ${device.limits.maxStorageBufferBindingSize}`);
         gpuBufferAudit?.stop();
         gpuBufferAudit = null;
@@ -114,22 +124,24 @@ loadButton.addEventListener('click', async () => {
             const spec = manifest.layers[i];
             const tensors = {};
             for (const [name, entry] of Object.entries(spec.tensors)) {
-                tensors[name] = await read(`${spec.directory}/${entry.file}`);
+                const matrix = name.endsWith('Proj');
+                const ArrayType = int4 && matrix ? Uint32Array : half && matrix ? Uint16Array : Float32Array;
+                tensors[name] = new ArrayType(await get(`${spec.directory}/${entry.file}`).arrayBuffer());
+                if (tensors[name].length !== entry.shape.reduce((a, b) => a * b, 1) * (int4 && matrix ? 5 / 32 : 1)) { throw new Error(`Invalid tensor size: ${name}`); }
             }
             layers.push(new WebGpuFullLayerSession(device, tensors, GEMMA3_1B, i));
             await device.queue.onSubmittedWorkDone();
-            status(`GPU layers ${i + 1}/${manifest.layers.length}`);
+            status(`GPU layers ${i + 1}/${manifest.layers.length}; tracked GPU bytes: ${gpuBufferAudit?.snapshot().liveBytes ?? "unavailable"}`);
         }
         session = new WebGpuFullModelSession(device, layers, norm);
-        head = new WebGpuLmHead(device, norm);
+        head = new WebGpuLmHead(device, norm, GEMMA3_1B.hiddenSize, GEMMA3_1B.rmsNormEps, half, int4);
         status('Uploading LM-head weights to persistent GPU buffers...');
-        await head.loadResidentWeights(get(manifest.head.file), manifest.head.shape[0], (done, total) => {
-            if (done === total || done % (8192 * 8) === 0) {
-                status(`LM-head weights resident: ${done}/${total} rows`);
-            }
+        const headFile = manifest.head.chunkBytes ? createChunkedHeadSource(get, manifest.head.chunkBytes, int4 ? 'q4' : 'f16') : get(manifest.head.file);
+        await head.loadResidentWeights(headFile, manifest.head.shape[0], (done, total) => {
+            status(`LM-head weights resident: ${done}/${total} rows; tracked GPU bytes: ${gpuBufferAudit?.snapshot().liveBytes ?? "unavailable"}`);
         });
         session.enableGpuOutput();
-        runtime = { session, head, tokenizer, tokenizerVerified, referenceText: tokenizerData.referenceText, referenceIds: tokenizerData.referenceTokenIds, headFile: get(manifest.head.file), vocab: manifest.head.shape[0], device };
+        runtime = { session, head, tokenizer, tokenizerVerified, referenceText: tokenizerData.referenceText, referenceIds: tokenizerData.referenceTokenIds, headFile, vocab: manifest.head.shape[0], device };
         unloadButton.disabled = false;
         sendButton.disabled = false;
         el('validate-combined').disabled = false;
@@ -138,7 +150,7 @@ loadButton.addEventListener('click', async () => {
         engine = new Gemma3ConversationEngine({
             session,
             tokenizer,
-            embed: id => embedding(id, runtime.headFile, sourceMode === 'hf' ? head : null),
+            embed: id => embedding(id, runtime.headFile, int4 || half || sourceMode !== 'local' ? head : null),
             predict: hidden => predict(hidden, runtime),
             eosTokenIds: GEMMA3_1B.eosTokenIds,
             useCache: el('use-cache').checked

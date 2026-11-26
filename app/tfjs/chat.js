@@ -75,6 +75,7 @@ loadButton.addEventListener('click', async () => {
         const get = source.value === 'hf' ? createRemoteModelSource() : createLocalModelSource(folder.files);
         const read = async name => new Float32Array(await get(name).arrayBuffer());
         const manifest = JSON.parse(await get('manifest.json').text());
+        if (manifest.precision && manifest.precision !== 'fp32') { throw new Error('WebGL requires Reference FP32 weights'); }
         if (manifest.head.mode !== 'full') { throw new Error('A full-vocabulary model export is required'); }
         const tokenizerData = JSON.parse(await get('chat-tokenizer.json').text());
         const tokenizer = new Gemma3ChatTokenizer(tokenizerData);

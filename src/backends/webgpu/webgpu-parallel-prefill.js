@@ -124,8 +124,47 @@ fn gelumul(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 `;
 
+const halfMatrixShader = `enable f16;
+struct Params {
+    n: u32, m: u32, tokens: u32, base: u32,
+    theta: f32, scalar: f32, eps: f32, history: u32,
+    window: u32, headDim: u32, capacity: u32, reserved: u32,
+};
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> halfWeights: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: Params;
+
+@compute @workgroup_size(64)
+fn matmulHalf(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= p.tokens * p.m) { return; }
+    let t = i / p.m;
+    let row = i % p.m;
+    var sum = 0.0;
+    for (var j = 0u; j < p.n; j = j + 1u) {
+        sum += f32(halfWeights[row * p.n + j]) * x[t * p.n + j];
+    }
+    y[i] = sum;
+}
+`;
+
+// Each 32-weight group occupies five u32 words: f32 scale, four packed words.
+const int4MatrixShader = halfMatrixShader.replace('enable f16;', '')
+    .replace('halfWeights: array<f16>', 'halfWeights: array<u32>')
+    .replace('@compute @workgroup_size(64)', `fn weightAt(i: u32) -> f32 {
+    let base = (i / 32u) * 5u;
+    let lane = i % 32u;
+    let packed = halfWeights[base + 1u + lane / 8u];
+    let q = i32((packed >> ((lane % 8u) * 4u)) & 15u) - 8;
+    return f32(q) * bitcast<f32>(halfWeights[base]);
+}
+@compute @workgroup_size(64)`)
+    .replace(/f32\(halfWeights\[([^\]]+)\]\)/g, 'weightAt($1)');
+
+
 export class WebGpuParallelPrefill {
-    constructor(device, config) {
+    constructor(device, config, halfWeights = false, int4Weights = false) {
         this.device = device;
         this.config = config;
         const module = device.createShaderModule({ code: shader });
@@ -134,6 +173,10 @@ export class WebGpuParallelPrefill {
             this.pipelines[name] = device.createComputePipeline({
                 layout: 'auto', compute: { module, entryPoint: name }
             });
+        }
+        if (halfWeights || int4Weights) {
+            const halfModule = device.createShaderModule({ code: int4Weights ? int4MatrixShader : halfMatrixShader });
+            this.pipelines.matmul = device.createComputePipeline({ layout: 'auto', compute: { module: halfModule, entryPoint: 'matmulHalf' } });
         }
     }
 

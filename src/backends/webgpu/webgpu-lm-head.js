@@ -1,3 +1,4 @@
+import { decodeInt4, decodeHalfArray, encodeHalfArray } from "./weight-precision.js";
 import { GEMMA3_1B } from "../../gemma3-core.js";
 
 // Stage 15: GPU final RMSNorm and tied LM head, with chunked vocabulary projection.
@@ -65,11 +66,45 @@ fn reduceChunk(@builtin(local_invocation_index) lane: u32) {
     }
 }`;
 
+const halfMatrixShader = `enable f16;
+struct Params { n: u32, m: u32, eps: f32, reserved: f32, };
+@group(0) @binding(0) var<storage, read> x: array<f32>;
+@group(0) @binding(1) var<storage, read> halfWeights: array<f16>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+@group(0) @binding(3) var<uniform> p: Params;
+@compute @workgroup_size(64)
+fn matvecHalf(@builtin(global_invocation_id) id: vec3<u32>) {
+    let r = id.x;
+    if (r >= p.m) { return; }
+    var acc = 0.0;
+    for (var c = 0u; c < p.n; c = c + 1u) {
+        acc += f32(halfWeights[r * p.n + c]) * x[c];
+    }
+    y[r] = acc;
+}
+`;
+
+// Each 32-weight group occupies five u32 words: f32 scale, four packed words.
+const int4MatrixShader = halfMatrixShader.replace('enable f16;', '')
+    .replace('halfWeights: array<f16>', 'halfWeights: array<u32>')
+    .replace('@compute @workgroup_size(64)', `fn weightAt(i: u32) -> f32 {
+    let base = (i / 32u) * 5u;
+    let lane = i % 32u;
+    let packed = halfWeights[base + 1u + lane / 8u];
+    let q = i32((packed >> ((lane % 8u) * 4u)) & 15u) - 8;
+    return f32(q) * bitcast<f32>(halfWeights[base]);
+}
+@compute @workgroup_size(64)`)
+    .replace(/f32\(halfWeights\[([^\]]+)\]\)/g, 'weightAt($1)');
+
+
 export class WebGpuLmHead {
-    constructor(device, normWeights, hiddenSize = GEMMA3_1B.hiddenSize, eps = GEMMA3_1B.rmsNormEps) {
+    constructor(device, normWeights, hiddenSize = GEMMA3_1B.hiddenSize, eps = GEMMA3_1B.rmsNormEps, halfWeights = false, int4Weights = false) {
         this.device = device;
         this.hiddenSize = hiddenSize;
         this.eps = eps;
+        this.halfWeights = halfWeights;
+        this.int4Weights = int4Weights;
         this.module = device.createShaderModule({ code: shader });
         this.pipelines = {};
         for (const name of ["norm", "matvec", "reduceChunk"]) {
@@ -77,6 +112,10 @@ export class WebGpuLmHead {
                 layout: "auto",
                 compute: { module: this.module, entryPoint: name }
             });
+        }
+        if (halfWeights || int4Weights) {
+            const module = device.createShaderModule({ code: int4Weights ? int4MatrixShader : halfMatrixShader });
+            this.pipelines.matvec = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "matvecHalf" } });
         }
         this.normWeight = this.upload(normWeights);
         this.input = this.make(hiddenSize * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
@@ -127,15 +166,16 @@ export class WebGpuLmHead {
     // Each chunk is below maxStorageBufferBindingSize; no weight upload during decode.
     async loadResidentWeights(headFile, vocab, onProgress = () => {}) {
         this.clearResidentWeights();
-        const rowBytes = this.hiddenSize * Float32Array.BYTES_PER_ELEMENT;
+        const rowBytes = this.hiddenSize * (this.int4Weights ? 20 / 32 : this.halfWeights ? 2 : 4);
         const maxRows = Math.max(1, Math.floor(this.device.limits.maxStorageBufferBindingSize / rowBytes));
         const chunkRows = Math.min(8192, maxRows);
 
         try {
             for (let start = 0; start < vocab; start += chunkRows) {
                 const end = Math.min(vocab, start + chunkRows);
-                const rows = new Float32Array(await headFile.slice(start * rowBytes, end * rowBytes).arrayBuffer());
-                if (rows.length !== (end - start) * this.hiddenSize) {
+                const ArrayType = this.int4Weights ? Uint32Array : this.halfWeights ? Uint16Array : Float32Array;
+                const rows = new ArrayType(await headFile.slice(start * rowBytes, end * rowBytes).arrayBuffer());
+                if (rows.byteLength !== (end - start) * rowBytes) {
                     throw new Error(`LM-head file truncated at row ${start}`);
                 }
                 const weight = this.make(rows.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
@@ -154,14 +194,16 @@ export class WebGpuLmHead {
     async readEmbedding(tokenId) {
         const chunk = this.residentChunks.find(entry => tokenId >= entry.start && tokenId < entry.end);
         if (!chunk) { throw new Error(`Invalid embedding token: ${tokenId}`); }
-        const bytes = this.hiddenSize * 4;
+        const bytes = this.hiddenSize * (this.int4Weights ? 20 / 32 : this.halfWeights ? 2 : 4);
         const buffer = this.make(bytes, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
         try {
             const encoder = this.device.createCommandEncoder();
             encoder.copyBufferToBuffer(chunk.weight, (tokenId - chunk.start) * bytes, buffer, 0, bytes);
             this.device.queue.submit([encoder.finish()]);
             await buffer.mapAsync(GPUMapMode.READ);
-            return new Float32Array(buffer.getMappedRange().slice(0));
+            const data = buffer.getMappedRange().slice(0);
+            if (this.int4Weights) { return decodeInt4(new Uint32Array(data)); }
+            return this.halfWeights ? decodeHalfArray(new Uint16Array(data)) : new Float32Array(data);
         } finally {
             buffer.destroy();
         }
@@ -255,11 +297,12 @@ export class WebGpuLmHead {
     }
 
     async logits(hidden, rows) {
+        if (this.int4Weights) { throw new Error("Use resident INT4 head for prediction"); }
         if (hidden.length !== this.hiddenSize || rows.length % this.hiddenSize !== 0) {
             throw new Error("LM head dimensions mismatch");
         }
         const count = rows.length / this.hiddenSize;
-        const weight = this.upload(rows);
+        const weight = this.upload(this.halfWeights && rows instanceof Float32Array ? encodeHalfArray(rows) : rows);
         const output = this.make(count * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
         const readback = this.make(count * 4, GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
         this.device.queue.writeBuffer(this.input, 0, hidden);
