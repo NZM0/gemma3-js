@@ -1,22 +1,40 @@
 # gemma3-js
 
-**v0.2.1 — Hugging Face Mobile INT4 loading**
+**v0.3.0 — WGSL Turbo**
 
-An independent, browser-based **Gemma 3 1B instruction-tuned text inference** implementation. Two backends are provided:
+An independent, browser-based **Gemma 3 1B instruction-tuned text inference** implementation. Three main backends are provided:
 
-- **Native WebGPU / WGSL**, with GPU-resident transformer operations, parallel prefill and KV caching.
+- **WGSL Turbo**, an optimized native WebGPU backend with no additional quantization or runtime dependencies.
+- **Native WebGPU / WGSL Reference**, with GPU-resident transformer operations, parallel prefill and KV caching.
 - **TensorFlow.js / WebGL**, an independently implemented inference path with a partitioned tied-vocabulary LM head to accommodate WebGL texture limits.
 
 The backends share model format, tokenizer and conversation management. The application is static HTML/CSS/JavaScript; no bundler is required. This project targets the **text-only 1B model**, not the full multimodal Gemma 3 family. It is an independent implementation, not an official Google product.
+
+## WGSL Turbo performance
+
+Same Mobile INT4 weights, prompt `Where is the capital of Japan?`, 16 input tokens, 24 generated tokens, KV cache enabled. Individual maintainer measurements, not controlled averages.
+
+| Device | Reference decode (tok/s) | Turbo decode (tok/s) | Speedup | Turbo prefill (ms) | Turbo TTFT (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Mac M4 | 10.11 | 57.31 | 5.67x | 161.6 | 167.8 |
+| iPhone 16e | 3.90 | 13.58 | 3.48x | 637 | 661 |
+
+Mac Turbo repeat runs: 54.02 and 54.12 tok/s. The iPhone Reference baseline above used remote model loading; Turbo used bundled model files served over local HTTPS. Inference ran on the device in both cases. The historical local Reference result was 3.88 tok/s.
+
+Tracked GPU buffers on Mac: 877.8 MiB (Reference) to 637.8 MiB (Turbo), a 240 MiB reduction. These are not total browser memory measurements.
+
+Turbo uses parallel reductions, tiled online-softmax attention, parallel INT4 matrix-vector operations, tiled prefill, shared scratch buffers and dynamically growing global KV caches. No model reconversion is required. See [WGSL-TURBO.md](WGSL-TURBO.md) for validation scope and limitations.
+
+[Open Turbo](app/webgpu-turbo/) · [Changelog](CHANGELOG.md)
 
 ## Run locally
 
 1. Obtain the converted Gemma 3 1B IT model directory (or export one as described below). It must contain `manifest.json`, `chat-tokenizer.json`, `lm-head.f32`, `final-norm.f32`, and the `layer-00` through `layer-25` directories.
 2. In this repository, run `npm run serve` (Python 3 required).
-3. Open `http://localhost:8000/app/` and choose **WebGPU** or **TensorFlow.js / WebGL**.
+3. Open `http://localhost:8000/app/` and choose **WGSL Turbo**, **WebGPU Reference** or **TensorFlow.js / WebGL**.
 4. Select the local folder or Hugging Face model source, then load the model.
 
-Model weights and Google-derived tokenizer data are **not** included in the source repository. Select Local folder or Hugging Face in either chat demo. The remote source uses the public NZM0/gemma3-js-1b-it repository and requires HTTPS, CORS and exact HTTP 206 byte ranges for sliced reads. WebGPU uploads the head in chunks and reads remote-mode embeddings from resident GPU weights; WebGL still loads the full head and uses remote row reads. New production exports store tied weights once; older exports remain supported. Remote FP32 loading and generation were exercised on the maintainer’s Mac using both backends. The TensorFlow.js demo uses TensorFlow.js 4.22.0 from a CDN, so its initial load requires network access. Browser/GPU support and available memory determine whether inference can run.
+Model weights and Google-derived tokenizer data are **not** included in the source repository. Select Local folder or Hugging Face in the applicable chat demo. The remote source uses the public NZM0/gemma3-js-1b-it repository and requires HTTPS, CORS and exact HTTP 206 byte ranges for sliced reads. WebGPU uploads the head in chunks and reads remote-mode embeddings from resident GPU weights; WebGL still loads the full head and uses remote row reads. New production exports store tied weights once; older exports remain supported. Remote FP32 loading and generation were exercised on the maintainer’s Mac using both backends. The TensorFlow.js demo uses TensorFlow.js 4.22.0 from a CDN, so its initial load requires network access. Browser/GPU support and available memory determine whether inference can run.
 
 ## Export model weights
 
@@ -54,7 +72,8 @@ The 512-token local-attention boundary was exercised, but full-vocabulary logit 
 
 ## Repository layout
 
-- `src/backends/webgpu/`: native WebGPU implementation
+- `src/backends/webgpu-turbo/`: optimized native WebGPU implementation
+- `src/backends/webgpu/`: native WebGPU reference implementation
 - `src/backends/tfjs-webgl/`: TensorFlow.js/WebGL implementation
 - `src/tokenizer/`: Gemma 3 BPE tokenizer, chat template and detokenizer
 - `app/`: static chat demos and validation utilities
@@ -102,7 +121,7 @@ Convert the original full FP32 export (not the Performance export):
 python3 python/convert_mobile.py --input model/REFERENCE_DIRECTORY --output model/mobile
 ```
 
-Select Bundled model (Mobile INT4) in the WebGPU chat for a local server, or Hugging Face (Mobile INT4) to fetch the published model from `NZM0/gemma3-js-1b-it-int4`. The latter requires that the model repository has been uploaded and made public. It downloads individual packed tensors and head chunks without HTTP range requests. Remote Mobile loading on iPhone has not yet been verified. Each group of 32
+Select Bundled model (Mobile INT4) in the WebGPU chat for a local server, or Hugging Face (Mobile INT4) to fetch the published model from `NZM0/gemma3-js-1b-it-int4`. The latter requires that the model repository has been uploaded and made public. It downloads individual packed tensors and head chunks without HTTP range requests. Remote Mobile loading with Reference was exercised on iPhone; Turbo was tested with bundled weights over local HTTPS. Each group of 32
 weights uses a float32 scale and four packed uint32 words, 5 bits per weight
 including scale overhead. The symmetric quantizer uses values -7 through 7,
 encoded with offset 8. Matrix input dimensions must be multiples of 32.
@@ -113,7 +132,7 @@ Execution logs are mirrored to console and best-effort localStorage; GPU
 allocation counts exclude driver allocations. Remote server log forwarding
 is not included. Nonresident diagnostic logits are not supported in INT4 mode.
 
-## Measured performance
+## Historical Reference performance
 
 Maintainer measurements using WebGPU, the prompt `Where is the capital of Japan?`,
 16 prompt tokens, KV caching enabled and 24 generated tokens. Single runs, not

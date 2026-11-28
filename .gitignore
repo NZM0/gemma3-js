@@ -14,3 +14,4 @@ models/
 *.pem
 *.key
 fixtures/official-model*/
+.venv-*/
